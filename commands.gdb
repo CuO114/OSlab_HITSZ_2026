@@ -1,4 +1,4 @@
-b kernel/exec.c:90
+b exec
 c
 p cpus[$tp]->proc->name
 n
