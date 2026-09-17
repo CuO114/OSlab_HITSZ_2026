@@ -1,6 +1,6 @@
-b exec
+b kernel/exec.c:90
 c
 p cpus[$tp]->proc->name
-finish
+n
 p cpus[$tp]->proc->name
-q
+n
