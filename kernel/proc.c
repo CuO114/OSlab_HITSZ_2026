@@ -21,6 +21,24 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[];  // trampoline.S
 
+static char *proc_state_name(enum procstate state) {
+  switch (state)
+  {
+  case UNUSED:
+    return "unused";
+  case SLEEPING:
+    return "sleep";
+  case RUNNABLE:
+    return "runble";
+  case RUNNING:
+    return "run";
+  case ZOMBIE:
+    return "zombie";
+  default:
+    return "unknown";
+  }
+}
+
 // initialize the proc table at boot time.
 void procinit(void) {
   struct proc *p;
@@ -339,6 +357,20 @@ void exit(int status) {
   acquire(&p->lock);
 
   // Give any children to init.
+
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name, proc_state_name(original_parent->state));
+
+  int child_index = 0;
+  struct proc *q;
+  for (q = proc; q < &proc[NPROC]; q++) {
+    if (q->parent == p) {
+      acquire(&q->lock);
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n", p->pid, child_index, q->pid, q->name, proc_state_name(q->state));
+      release(&q->lock);
+      child_index++;
+    }
+  }
+
   reparent(p);
 
   // Parent might be sleeping in wait().
@@ -356,7 +388,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -396,6 +428,11 @@ int wait(uint64 addr) {
 
     // No point waiting if we don't have any children.
     if (!havekids || p->killed) {
+      release(&p->lock);
+      return -1;
+    }
+
+    if (flags == 1) {
       release(&p->lock);
       return -1;
     }
