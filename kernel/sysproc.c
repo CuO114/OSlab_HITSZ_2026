@@ -121,3 +121,69 @@ uint64 sys_yield(void) {
   yield();
   return 0;
 }
+
+uint64 sys_seccomp_ctl(void)
+{
+  int op;
+  uint64 value;
+  struct proc *p = myproc();
+
+  // value 是 64 位数值，不是用户指针。
+  if (argint(0, &op) < 0 || argaddr(1, &value) < 0)
+    return -1;
+
+  if (op == 0) {
+    acquire(&p->lock);
+    p->seccomp_mask = value;
+    p->seccomp_enabled = 1; // 零掩码仍启用过滤。
+    release(&p->lock);
+    return 0;
+  }
+
+  if (op == 1) {
+    // 避免截断后变为负数。
+    if (value > 0x7fffffffULL)
+      return -1;
+    acquire(&p->lock);
+    p->max_children = (int)value;
+    release(&p->lock);
+    return 0;
+  }
+
+  return -1;
+}
+
+uint64 sys_seccomp_getlog(void)
+{
+  struct proc *p = myproc();
+  uint64 bufaddr, lenaddr;
+  uint64 snapshot[32];
+  int capacity, n;
+
+  if (argaddr(0, &bufaddr) < 0 || argaddr(1, &lenaddr) < 0)
+    return -1;
+  // 通过 copyin 读取用户容量。
+  if (copyin(p->pagetable, (char *)&capacity,
+             lenaddr, sizeof(capacity)) < 0)
+    return -1;
+  if (capacity < 0)
+    return -1;
+
+  acquire(&p->lock);
+  n = p->blocked_count;
+  if (n > capacity)
+    n = capacity;
+  int start = (p->blocked_next + 32 - p->blocked_count) % 32;
+  // 从最旧记录起复制，保持时间顺序。
+  for (int i = 0; i < n; i++)
+    snapshot[i] = p->blocked_log[(start + i) % 32];
+  // 先释放锁，再 copyout 快照。
+  release(&p->lock);
+
+  if (n > 0 && copyout(p->pagetable, bufaddr,
+                       (char *)snapshot, n * sizeof(uint64)) < 0)
+    return -1;
+  if (copyout(p->pagetable, lenaddr, (char *)&n, sizeof(n)) < 0)
+    return -1;
+  return 0;
+}

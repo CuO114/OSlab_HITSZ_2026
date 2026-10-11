@@ -10,6 +10,24 @@ struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
 
+static int count_children_locked(struct proc *p)
+{
+  int n = 0;
+  struct proc *q;
+  for (q = proc; q < &proc[NPROC]; q++)
+    if (q->parent == p)
+      n++;
+  return n;
+}
+
+static void undo_child_reservation(struct proc *p)
+{
+  acquire(&p->lock);
+  // 按实际孩子重算，撤销失败预留。
+  p->child_count = count_children_locked(p);
+  release(&p->lock);
+}
+
 struct proc *initproc;
 
 int nextpid = 1;
@@ -113,6 +131,13 @@ static struct proc *allocproc(void) {
   return 0;
 
 found:
+  p->seccomp_enabled = 0;
+  p->seccomp_mask = ~0ULL;
+  p->blocked_count = 0;
+  p->blocked_next = 0;
+  memset(p->blocked_log, 0, sizeof(p->blocked_log));
+  p->max_children = -1; // -1 表示无限制。
+  p->child_count = 0;
   p->pid = allocpid();
 
   // Allocate a trapframe page.
@@ -248,17 +273,36 @@ int fork(void) {
   struct proc *np;
   struct proc *p = myproc();
 
-  // Allocate process.
-  if ((np = allocproc()) == 0) {
+  int inherited_enabled;
+  uint64 inherited_mask;
+  int inherited_limit;
+
+  acquire(&p->lock);
+  p->child_count = count_children_locked(p);
+  if (p->max_children >= 0 && p->child_count >= p->max_children) {
+    release(&p->lock);
     return -1;
   }
 
+  p->child_count++;
+  inherited_enabled = p->seccomp_enabled;
+  inherited_mask = p->seccomp_mask;
+  inherited_limit = p->max_children;
+  release(&p->lock);
+
+  // Allocate process.
+  if ((np = allocproc()) == 0) {
+    undo_child_reservation(p);
+    return -1;
+}
+
   // Copy user memory from parent to child.
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
-    freeproc(np);
-    release(&np->lock);
-    return -1;
-  }
+  freeproc(np);
+  release(&np->lock); // 先释放孩子锁，再获取父锁回滚。
+  undo_child_reservation(p);
+  return -1;
+}
   np->sz = p->sz;
 
   np->parent = p;
@@ -277,6 +321,14 @@ int fork(void) {
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
+
+  np->seccomp_enabled = inherited_enabled;
+  np->seccomp_mask = inherited_mask;
+  np->max_children = inherited_limit;
+  np->child_count = 0;
+  np->blocked_count = 0;
+  np->blocked_next = 0;
+  memset(np->blocked_log, 0, sizeof(np->blocked_log));
 
   np->state = RUNNABLE;
 
@@ -417,7 +469,9 @@ int wait(uint64 addr, int flags) {
             release(&p->lock);
             return -1;
           }
-          freeproc(np);
+          p->child_count = count_children_locked(p);
+          p->child_count--;
+          freeproc(np);;
           release(&np->lock);
           release(&p->lock);
           return pid;

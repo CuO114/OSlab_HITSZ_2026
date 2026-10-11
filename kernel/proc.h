@@ -103,6 +103,16 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  uint64 seccomp_mask;
+  int seccomp_enabled; // 零掩码也表示有效限制。
+
+  uint64 blocked_log[32];
+  int blocked_count;
+  int blocked_next;
+
+  int max_children; // -1 不限；僵尸也占名额。
+  int child_count;
 };
 
 extern struct proc proc[NPROC];
