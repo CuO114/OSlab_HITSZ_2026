@@ -47,22 +47,23 @@ find(char *path, char *name)
     break;
 
   case T_DIR:
-    if (strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)) {
+    if (strlen(path) + 1 + DIRSIZ + 1 > sizeof(buf)) { // 路径 + '/' + 目标项名称 + /0
       fprintf(2, "find: path too long\n");
       break;
     }
 
 
     strcpy(buf, path);
-    p = buf + strlen(buf);
+    p = buf + strlen(buf); // 指针指向buf的 /0
     *p++ = '/';
 
 
-    while (read(fd, &de, sizeof(de)) == sizeof(de)) {
+    while (read(fd, &de, sizeof(de)) == sizeof(de)) { // 判断是否读到完整目录项
 
       if (de.inum == 0)
         continue;
 
+      // 复制文件名并补 /0
       memmove(p, de.name, DIRSIZ);
       p[DIRSIZ] = 0;
 
